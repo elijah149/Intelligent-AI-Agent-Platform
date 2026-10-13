@@ -1,0 +1,45 @@
+import pytest
+
+from backend.app.integrations.registry import get_integration
+from backend.app.tools.http_tool import call_rest_api
+
+
+@pytest.mark.asyncio
+async def test_unregistered_integration_is_rejected():
+    result = await call_rest_api(
+        integration="unknown_system",
+        method="GET",
+        path="/health",
+    )
+
+    assert result["success"] is False
+    assert "not registered" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_disallowed_method_is_rejected():
+    integration = get_integration("local_health")
+    assert "POST" not in integration.allowed_methods
+
+    result = await call_rest_api(
+        integration="local_health",
+        method="POST",
+        path="/health",
+    )
+
+    assert result["success"] is False
+    assert "not allowed" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_invalid_integration_does_not_make_http_request():
+    result = await call_rest_api(
+        integration="malicious_system",
+        method="GET",
+        path="/health",
+    )
+
+    assert result == {
+        "success": False,
+        "message": "Integration 'malicious_system' is not registered.",
+    }

@@ -1,16 +1,15 @@
 from sqlalchemy.orm import Session
 
-from backend.app.models.database import Incident
+from backend.app.models.database import Account, Incident
 from backend.app.tools.account_tools import get_customer_account
 
 
 def verify_incident_resolution(
     db: Session,
     incident_id: int,
+    username: str,
 ) -> dict:
-    """
-    Verify that the action actually resolved the incident.
-    """
+    """Verify that the specific account linked to an incident is fixed."""
 
     incident = (
         db.query(Incident)
@@ -18,30 +17,35 @@ def verify_incident_resolution(
         .first()
     )
 
-    if not incident:
+    if incident is None:
         return {
             "success": False,
             "verified": False,
             "message": "Incident not found.",
         }
 
-    customer = incident.customer
+    account = (
+        db.query(Account)
+        .filter(
+            Account.username == username,
+            Account.customer_id == incident.customer_id,
+        )
+        .first()
+    )
 
-    if not customer or not customer.accounts:
+    if account is None:
         return {
             "success": False,
             "verified": False,
-            "message": "Customer account not found.",
+            "message": (
+                "The specified account does not belong "
+                "to the customer associated with this incident."
+            ),
         }
 
-    account = customer.accounts[0]
+    account_data = get_customer_account(db, username)
 
-    account_data = get_customer_account(
-        db,
-        account.username,
-    )
-
-    if not account_data["found"]:
+    if not account_data.get("found"):
         return {
             "success": False,
             "verified": False,

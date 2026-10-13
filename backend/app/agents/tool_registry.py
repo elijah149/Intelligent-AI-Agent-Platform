@@ -1,3 +1,4 @@
+from backend.app.tools.http_tool import call_rest_api
 from backend.app.tools.account_tools import (
     get_customer_account,
     unlock_account,
@@ -5,20 +6,25 @@ from backend.app.tools.account_tools import (
 from backend.app.services.incident_service import (
     create_incident,
     update_diagnosis,
-    close_incident,
 )
-from backend.app.services.diagnosis_service import (
-    diagnose_incident,
-)
+from backend.app.services.diagnosis_service import diagnose_incident
 from backend.app.services.verification_service import (
     verify_incident_resolution,
 )
-from backend.app.services.resolution_service import (
-    resolve_incident,
-)
+from backend.app.services.resolution_service import resolve_incident
 
 
 TOOL_REGISTRY = {
+    "call_rest_api": {
+        "function": call_rest_api,
+        "description": (
+            "Call an external REST API to communicate "
+            "with an integrated external system."
+        ),
+        "read_only": False,
+        "requires_authorization": True,
+        "required_permission": "integration.call_api",
+    },
     "get_customer_account": {
         "function": get_customer_account,
         "description": (
@@ -27,9 +33,9 @@ TOOL_REGISTRY = {
             "and lock state."
         ),
         "read_only": True,
-        "requires_authorization": False,
+        "requires_authorization": True,
+        "required_permission": "account.view",
     },
-
     "create_incident": {
         "function": create_incident,
         "description": (
@@ -37,9 +43,9 @@ TOOL_REGISTRY = {
             "for tracking and investigation."
         ),
         "read_only": False,
-        "requires_authorization": False,
+        "requires_authorization": True,
+        "required_permission": "incident.create",
     },
-
     "diagnose_incident": {
         "function": diagnose_incident,
         "description": (
@@ -47,9 +53,9 @@ TOOL_REGISTRY = {
             "actual account state and generate a diagnosis."
         ),
         "read_only": True,
-        "requires_authorization": False,
+        "requires_authorization": True,
+        "required_permission": "incident.diagnose",
     },
-
     "unlock_account": {
         "function": unlock_account,
         "description": (
@@ -58,8 +64,8 @@ TOOL_REGISTRY = {
         ),
         "read_only": False,
         "requires_authorization": True,
+        "required_permission": "account.unlock",
     },
-
     "verify_incident_resolution": {
         "function": verify_incident_resolution,
         "description": (
@@ -67,9 +73,9 @@ TOOL_REGISTRY = {
             "actually in the expected state after a corrective action."
         ),
         "read_only": True,
-        "requires_authorization": False,
+        "requires_authorization": True,
+        "required_permission": "incident.verify",
     },
-
     "resolve_incident": {
         "function": resolve_incident,
         "description": (
@@ -77,56 +83,40 @@ TOOL_REGISTRY = {
             "that the underlying problem has been fixed."
         ),
         "read_only": False,
-        "requires_authorization": False,
+        "requires_authorization": True,
+        "required_permission": "incident.resolve",
     },
-
     "update_diagnosis": {
         "function": update_diagnosis,
         "description": (
             "Store or update the diagnosis associated with an incident."
         ),
         "read_only": False,
-        "requires_authorization": False,
-    },
-
-    "close_incident": {
-        "function": close_incident,
-        "description": (
-            "Mark an incident as resolved."
-        ),
-        "read_only": False,
-        "requires_authorization": False,
+        "requires_authorization": True,
+        "required_permission": "incident.diagnose",
     },
 }
 
 
 def get_tool(name: str):
-    """
-    Retrieve a registered tool by name.
-    """
-
+    """Retrieve a registered tool by name."""
     tool = TOOL_REGISTRY.get(name)
 
-    if not tool:
-        raise ValueError(
-            f"Tool '{name}' is not registered."
-        )
+    if tool is None:
+        raise ValueError(f"Tool '{name}' is not registered.")
 
     return tool
 
 
 def list_tools() -> list[dict]:
-    """
-    Return tool information that can later be provided
-    to the AI agent.
-    """
-
+    """Return tool descriptions and authorization metadata."""
     return [
         {
             "name": name,
             "description": tool["description"],
             "read_only": tool["read_only"],
             "requires_authorization": tool["requires_authorization"],
+            "required_permission": tool["required_permission"],
         }
         for name, tool in TOOL_REGISTRY.items()
     ]

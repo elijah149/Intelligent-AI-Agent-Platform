@@ -1,11 +1,34 @@
 import json
 
 from sqlalchemy.orm import Session
+from backend.app.models.database import Incident
 
 from backend.app.agents.llm_agent import llm_agent
 from backend.app.agents.tool_executor import execute_tool
 from backend.app.agents.tool_registry import list_tools
+from backend.app.integrations.registry import list_integrations
 from backend.app.agents.execution_policy import execution_policy
+
+
+def incident_belongs_to_customer(
+    db: Session,
+    incident_id: int | None,
+    customer_id: int | None,
+) -> bool:
+    """Return True only when the incident belongs to this customer."""
+    if incident_id is None or customer_id is None:
+        return False
+
+    incident = (
+        db.query(Incident)
+        .filter(Incident.id == incident_id)
+        .first()
+    )
+
+    return (
+        incident is not None
+        and incident.customer_id == customer_id
+    )
 
 
 class AgentLoop:
@@ -37,10 +60,16 @@ class AgentLoop:
         db: Session,
         customer_message: str,
         username: str,
-        incident_id: int,
+        incident_id: int | None = None,
         authorized: bool = False,
+        permissions: set[str] | None = None,
+        actor_username: str | None = None,
         max_steps: int = 7,
     ) -> dict:
+
+        # Permissions must come from trusted server-side RBAC.
+        # The legacy authorized flag must never grant tool permissions.
+        effective_permissions = set(permissions or ())
 
         history = []
 
@@ -51,6 +80,11 @@ class AgentLoop:
         # Track whether a corrective action has actually
         # been executed during this incident.
         corrective_action_executed = False
+
+        # Store the verified customer ID obtained during
+        # account investigation.
+        customer_id = None
+        incident_created = incident_id is not None
 
         # ------------------------------------------------
         # Initial LLM reasoning
@@ -65,11 +99,32 @@ class AgentLoop:
 
         decision = decision_result["decision"]
 
+        # The first operational step is always account investigation.
+        # The LLM may understand the customer's intent, but it must
+        # not skip the required investigation before incident creation.
+        decision = {
+            "intent": decision.get(
+                "intent",
+                "Investigate customer account",
+            ),
+            "tool": "get_customer_account",
+            "reason": (
+                "Account state must be investigated before "
+                "creating and diagnosing the support incident."
+            ),
+            "requires_authorization": False,
+        }
+
+        # Global sequential counter for audit history.
+        history_step = 0
+
         # Normalize possible null tool values.
         if decision.get("tool") is None:
             decision["tool"] = "none"
 
         for step in range(1, max_steps + 1):
+
+            history_step += 1
 
             tool_name = decision.get("tool")
 
@@ -80,7 +135,7 @@ class AgentLoop:
                 decision["tool"] = "none"
 
             history.append({
-                "step": step,
+                "step": history_step,
                 "decision": decision,
             })
 
@@ -127,6 +182,7 @@ class AgentLoop:
                     tool_name=tool_name,
                     history=history,
                     authorized=authorized,
+                    permissions=effective_permissions,
                 )
             )
 
@@ -165,9 +221,10 @@ class AgentLoop:
             # Authorization boundary
             # ------------------------------------------------
 
+            required_permission = tool.get("required_permission")
             if (
-                tool["requires_authorization"]
-                and not authorized
+                required_permission is not None
+                and required_permission not in effective_permissions
             ):
 
                 return {
@@ -187,6 +244,7 @@ class AgentLoop:
 
             parameters = {}
 
+
             if tool_name == "get_customer_account":
 
                 parameters = {
@@ -199,18 +257,79 @@ class AgentLoop:
                     "username": username,
                     "incident_id": incident_id,
                     "authorized": authorized,
+                    "performed_by": actor_username,
+                }
+
+            elif tool_name == "create_incident":
+
+                if customer_id is None:
+                    return {
+                        "success": False,
+                        "status": "missing_customer",
+                        "tool": tool_name,
+                        "message": (
+                            "Customer ID is required before "
+                            "creating an incident."
+                        ),
+                        "history": history,
+                    }
+
+                parameters = {
+                    "customer_id": customer_id,
+                    "issue": customer_message,
+                }
+
+            elif tool_name == "diagnose_incident":
+
+                parameters = {
+                    "incident_id": incident_id,
+                    "username": username,
                 }
 
             elif tool_name in {
-                "diagnose_incident",
                 "verify_incident_resolution",
                 "resolve_incident",
-                "close_incident",
             }:
 
                 parameters = {
                     "incident_id": incident_id,
                 }
+
+            elif tool_name == "call_rest_api":
+
+                parameters = {
+                    "integration": decision.get(
+                        "integration"
+                    ),
+                    "method": decision.get(
+                        "method",
+                        "GET",
+                    ),
+                    "path": decision.get(
+                        "path",
+                        "/",
+                    ),
+                    "payload": decision.get(
+                        "payload"
+                    ),
+                    "headers": decision.get(
+                        "headers"
+                    ),
+                }
+
+                if not parameters["integration"]:
+
+                    return {
+                        "success": False,
+                        "status": "missing_integration",
+                        "tool": tool_name,
+                        "message": (
+                            "An approved integration is "
+                            "required before calling the "
+                            "REST API."
+                        ),
+                        "history": history,
+                    }
 
             else:
 
@@ -220,7 +339,8 @@ class AgentLoop:
                     "tool": tool_name,
                     "message": (
                         "The selected tool does not yet have "
-                        "an execution parameter mapping."
+                        "an execution parameter mapping. "
+                        f"tool_name={tool_name!r}"
                     ),
                     "history": history,
                 }
@@ -229,14 +349,27 @@ class AgentLoop:
             # Execute tool
             # ------------------------------------------------
 
-            execution = execute_tool(
+            execution = await execute_tool(
                 db=db,
                 tool_name=tool_name,
                 parameters=parameters,
                 authorized=authorized,
+                    permissions=effective_permissions,
             )
 
             history[-1]["execution"] = execution
+
+            # Capture the verified customer ID from the
+            # account investigation result.
+            if (
+                tool_name == "get_customer_account"
+                and execution.get("success")
+            ):
+                result = execution.get("result", {})
+
+                if result.get("found"):
+                    customer = result.get("customer", {})
+                    customer_id = customer.get("id")
 
             if not execution["success"]:
 
@@ -249,15 +382,79 @@ class AgentLoop:
                 }
 
             # ------------------------------------------------
-            # Track corrective action
+            # SECURITY: Validate supplied incident ownership
+            # before diagnosis or any subsequent incident action.
             # ------------------------------------------------
 
-            if tool_name in {
-                "unlock_account",
-                "close_incident",
-            }:
+            if (
+                tool_name == "get_customer_account"
+                and incident_created
+                and not incident_belongs_to_customer(
+                    db=db,
+                    incident_id=incident_id,
+                    customer_id=customer_id,
+                )
+            ):
+                return {
+                    "success": False,
+                    "status": "incident_customer_mismatch",
+                    "message": (
+                        "The supplied incident does not belong "
+                        "to the investigated account's customer, "
+                        "or the incident/customer could not be found."
+                    ),
+                    "incident_id": incident_id,
+                    "history": history,
+                }
 
-                corrective_action_executed = True
+            # ------------------------------------------------
+            # Handle successful incident creation
+            # ------------------------------------------------
+            #
+            # A newly created incident becomes the active
+            # incident for all following diagnosis,
+            # verification and resolution steps.
+            # ------------------------------------------------
+
+            if tool_name == "create_incident":
+
+                result = execution.get("result", {})
+
+                new_incident_id = result.get("incident_id")
+
+                if new_incident_id is not None:
+                    incident_id = new_incident_id
+
+            # ------------------------------------------------
+            # Track corrective action
+            # ------------------------------------------------
+            #
+            # A corrective action counts as executed only
+            # when the actual tool result reports success.
+            # ------------------------------------------------
+
+            if tool_name == "unlock_account":
+
+                result = execution.get("result", {})
+
+                action_succeeded = (
+                    result.get("success") is True
+                )
+
+                if action_succeeded:
+                    corrective_action_executed = True
+                else:
+                    return {
+                        "success": False,
+                        "status": "action_failed",
+                        "tool": tool_name,
+                        "message": result.get(
+                            "message",
+                            "Corrective action failed.",
+                        ),
+                        "incident_id": incident_id,
+                        "history": history,
+                    }
 
             # ------------------------------------------------
             # FORMAL DIAGNOSIS ENGINE
@@ -272,20 +469,94 @@ class AgentLoop:
 
             if (
                 tool_name == "get_customer_account"
+                and not incident_created
+                and customer_id is not None
+            ):
+
+                incident_creation = await execute_tool(
+                    db=db,
+                    tool_name="create_incident",
+                    parameters={
+                        "customer_id": customer_id,
+                        "issue": customer_message,
+                    },
+                    authorized=authorized,
+                    permissions=effective_permissions,
+                )
+
+                history_step += 1
+
+                history.append({
+                    "step": history_step,
+                    "decision": {
+                        "intent": (
+                            "Create incident for customer support tracking"
+                        ),
+                        "tool": "create_incident",
+                        "reason": (
+                            "Customer account investigation identified "
+                            "the customer. An incident must be created "
+                            "before formal diagnosis."
+                        ),
+                        "requires_authorization": False,
+                    },
+                    "execution": incident_creation,
+                })
+
+                if not incident_creation["success"]:
+                    return {
+                        "success": False,
+                        "status": "incident_creation_failed",
+                        "tool": "create_incident",
+                        "message": incident_creation["message"],
+                        "history": history,
+                    }
+
+                incident_result = incident_creation.get(
+                    "result",
+                    {},
+                )
+
+                new_incident_id = incident_result.get(
+                    "incident_id"
+                )
+
+                if new_incident_id is None:
+                    return {
+                        "success": False,
+                        "status": "incident_creation_failed",
+                        "tool": "create_incident",
+                        "message": (
+                            "Incident was created but no incident ID "
+                            "was returned."
+                        ),
+                        "history": history,
+                    }
+
+                incident_id = new_incident_id
+                incident_created = True
+
+            if (
+                tool_name == "get_customer_account"
+                and incident_created
                 and not diagnosis_completed
             ):
 
-                diagnosis_execution = execute_tool(
+                diagnosis_execution = await execute_tool(
                     db=db,
                     tool_name="diagnose_incident",
                     parameters={
                         "incident_id": incident_id,
+                        "username": username,
                     },
                     authorized=authorized,
+                    permissions=effective_permissions,
                 )
 
+                history_step += 1
+
                 history.append({
-                    "step": step + 1,
+                    "step": history_step,
                     "decision": {
                         "intent": (
                             "Perform formal incident diagnosis"
@@ -335,7 +606,7 @@ class AgentLoop:
 
                 if recommended_action == "unlock_account":
 
-                    if not authorized:
+                    if "account.unlock" not in effective_permissions:
 
                         return {
                             "success": True,
@@ -366,6 +637,43 @@ class AgentLoop:
                     continue
 
                 # ------------------------------------------------
+                # Further investigation
+                # ------------------------------------------------
+                #
+                # The formal diagnosis is authoritative.
+                # If no account-level corrective action was
+                # identified, do not allow the LLM to create
+                # another incident automatically.
+                #
+                # The current incident remains the active
+                # incident and should be escalated when the
+                # available tools cannot resolve the issue.
+                # ------------------------------------------------
+
+                if recommended_action == "further_investigation":
+
+                    return {
+                        "success": False,
+                        "status": "needs_escalation",
+                        "incident_id": incident_id,
+                        "message": (
+                            f"Incident #{incident_id}: further investigation is required.\n"
+                            f"Root cause: {diagnosis_result.get('root_cause', 'Not confirmed.')}\n"
+                            f"Account status: {diagnosis_result.get('account', {}).get('status', 'Unknown')}\n"
+                            f"Account locked: {diagnosis_result.get('account', {}).get('is_locked', 'Unknown')}\n"
+                            f"Evidence:\n"
+                            + "\n".join(
+                                f"- {item}"
+                                for item in diagnosis_result.get("evidence", [])
+                            )
+                            + "\nNext steps: inspect authentication-service logs and "
+                            "verify the login failure reason. No account changes were made."
+                        ),
+                        "diagnosis": diagnosis_result,
+                        "history": history,
+                    }
+
+                # ------------------------------------------------
                 # Other diagnosis
                 # ------------------------------------------------
 
@@ -391,6 +699,10 @@ Available tools:
 
 {json.dumps(list_tools(), indent=2)}
 
+Approved integrations:
+
+{json.dumps(list_integrations(), indent=2)}
+
 Rules:
 
 - Do not invent tools.
@@ -400,13 +712,38 @@ Rules:
 - If the problem is resolved, choose "none".
 - Return ONLY valid JSON.
 
+For REST API calls:
+
+- Only use "call_rest_api" with an approved integration.
+- "integration" must be an integration from the approved list.
+- Never invent an integration.
+- "method" must be GET, POST, PUT, PATCH, or DELETE.
+- "path" must begin with "/".
+- Never provide an arbitrary complete URL.
+- "payload" may be null.
+- "headers" may be null.
+- Never invent credentials or secrets.
+
+For non-REST tools:
+
+- "integration" must be null.
+- "method" must be null.
+- "path" must be null.
+- "payload" must be null.
+- "headers" must be null.
+
 Return:
 
 {{
     "intent": "short description",
     "tool": "tool_name_or_none",
     "reason": "why this is the next step",
-    "requires_authorization": true_or_false
+    "requires_authorization": true_or_false,
+    "integration": "local_health",
+    "method": "GET",
+    "path": "/health",
+    "payload": null,
+    "headers": null
 }}
 """
 
@@ -484,17 +821,20 @@ Return:
                         # Verification
                         # ------------------------------------------------
 
-                        verification = execute_tool(
+                        verification = await execute_tool(
                             db=db,
                             tool_name="verify_incident_resolution",
                             parameters={
                                 "incident_id": incident_id,
                             },
                             authorized=authorized,
+                    permissions=effective_permissions,
                         )
 
+                        history_step += 1
+
                         history.append({
-                            "step": step + 1,
+                            "step": history_step,
                             "decision": {
                                 "intent": (
                                     "Verify successful account recovery"
@@ -555,17 +895,20 @@ Return:
                         # Resolution
                         # ------------------------------------------------
 
-                        resolution = execute_tool(
+                        resolution = await execute_tool(
                             db=db,
                             tool_name="resolve_incident",
                             parameters={
                                 "incident_id": incident_id,
                             },
                             authorized=authorized,
+                    permissions=effective_permissions,
                         )
 
+                        history_step += 1
+
                         history.append({
-                            "step": step + 2,
+                            "step": history_step,
                             "decision": {
                                 "intent": (
                                     "Resolve recovered incident"
@@ -647,6 +990,10 @@ Available tools:
 
 {json.dumps(list_tools(), indent=2)}
 
+Approved integrations:
+
+{json.dumps(list_integrations(), indent=2)}
+
 Remember:
 
 - Do not invent tools.
@@ -656,13 +1003,38 @@ Remember:
 - If the problem is resolved, choose "none".
 - Return ONLY valid JSON.
 
+For REST API calls:
+
+- Only use "call_rest_api" with an approved integration.
+- "integration" must be an integration from the approved list.
+- Never invent an integration.
+- "method" must be GET, POST, PUT, PATCH, or DELETE.
+- "path" must begin with "/".
+- Never provide an arbitrary complete URL.
+- "payload" may be null.
+- "headers" may be null.
+- Never invent credentials or secrets.
+
+For non-REST tools:
+
+- "integration" must be null.
+- "method" must be null.
+- "path" must be null.
+- "payload" must be null.
+- "headers" must be null.
+
 Return:
 
 {{
     "intent": "short description",
     "tool": "tool_name_or_none",
     "reason": "why this is the next step",
-    "requires_authorization": true_or_false
+    "requires_authorization": true_or_false,
+    "integration": "local_health",
+    "method": "GET",
+    "path": "/health",
+    "payload": null,
+    "headers": null
 }}
 """
 

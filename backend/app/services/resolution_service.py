@@ -1,21 +1,25 @@
 from sqlalchemy.orm import Session
 
-from backend.app.services.incident_service import close_incident
-from backend.app.services.verification_service import verify_incident_resolution
+from backend.app.services.incident_service import (
+    close_incident,
+    get_resolution_verification_token,
+)
+from backend.app.services.verification_service import (
+    verify_incident_resolution,
+)
 
 
 def resolve_incident(
     db: Session,
     incident_id: int,
+    username: str,
 ) -> dict:
-    """
-    Verify an incident and resolve it only when the
-    underlying problem has actually been fixed.
-    """
+    """Resolve an incident only after verifying its specific account."""
 
     verification = verify_incident_resolution(
-        db,
-        incident_id,
+        db=db,
+        incident_id=incident_id,
+        username=username,
     )
 
     if not verification["success"]:
@@ -39,6 +43,7 @@ def resolve_incident(
     incident = close_incident(
         db,
         incident_id,
+        verification_token=get_resolution_verification_token(),
     )
 
     return {

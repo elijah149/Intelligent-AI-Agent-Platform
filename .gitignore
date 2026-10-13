@@ -7,3 +7,32 @@ __pycache__/
 node_modules/
 dist/
 build/
+
+# Secrets and local environment files
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local backups
+*.backup
+*.pre-*
+*.bak
+
+# Test and tooling artifacts
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Additional local backup variants
+*.bak*
+*.before-*
+backups/
+
+# Frontend dependencies and generated output
+frontend/node_modules/
+frontend/dist/
+
+# Backup files using underscore separators
+*.before_*

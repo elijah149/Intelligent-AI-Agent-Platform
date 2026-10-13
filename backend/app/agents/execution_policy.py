@@ -1,40 +1,40 @@
+from collections.abc import Iterable
+
 from backend.app.agents.tool_registry import get_tool
+from backend.app.agents.authorization import authorization_policy
 
 
 class ExecutionPolicy:
-    """
-    Additional safety rules for agent tool execution.
-    """
+    """Additional safety rules for agent tool execution."""
 
     def can_execute(
         self,
         tool_name: str,
         history: list,
         authorized: bool = False,
+        permissions: Iterable[str] | None = None,
     ) -> tuple[bool, str, str | None]:
-
         tool = get_tool(tool_name)
 
-        # -------------------------------------------------
-        # Rule 1: Protected actions require authorization
-        # -------------------------------------------------
-
-        if tool["requires_authorization"] and not authorized:
+        # Check the tool's specific permission, not a global
+        # authorization flag shared across unrelated actions.
+        if not authorization_policy.can_execute(
+            tool_name=tool_name,
+            authorized=authorized,
+            permissions=permissions,
+        ):
             return (
                 False,
-                f"Tool '{tool_name}' requires authorization.",
+                f"Permission required to execute tool '{tool_name}'.",
                 None,
             )
 
-        # -------------------------------------------------
-        # Rule 2: Action tools require investigation first
-        # -------------------------------------------------
-
+        # Mutating tools require account investigation first.
         if not tool["read_only"]:
-
             has_investigation = any(
                 item.get("execution", {}).get("tool")
                 == "get_customer_account"
+                and item.get("execution", {}).get("success")
                 for item in history
             )
 
@@ -43,7 +43,7 @@ class ExecutionPolicy:
                     False,
                     (
                         f"Tool '{tool_name}' cannot be executed "
-                        "before account investigation."
+                        "before successful account investigation."
                     ),
                     "get_customer_account",
                 )

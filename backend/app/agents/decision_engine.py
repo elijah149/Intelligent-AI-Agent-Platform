@@ -1,33 +1,29 @@
+from collections.abc import Iterable
+
 from sqlalchemy.orm import Session
 
 from backend.app.agents.tool_executor import execute_tool
 
 
 class AgentDecisionEngine:
-    """
-    Decision engine for determining what the AI agent
-    should do based on the current incident state.
-    """
+    """Determine the next action using explicit permissions."""
 
-    def analyze_account_issue(
+    async def analyze_account_issue(
         self,
         db: Session,
         username: str,
         incident_id: int,
         authorized: bool = False,
+        permissions: Iterable[str] | None = None,
     ) -> dict:
-        """
-        Analyze an account-related problem and determine
-        the next appropriate action.
-        """
+        granted_permissions = set(permissions or ())
 
-        # Step 1: Inspect account state
-        account_result = execute_tool(
+        # Legacy boolean is deliberately not trusted.
+        account_result = await execute_tool(
             db=db,
             tool_name="get_customer_account",
-            parameters={
-                "username": username,
-            },
+            parameters={"username": username},
+            permissions=granted_permissions,
         )
 
         if not account_result["success"]:
@@ -48,15 +44,13 @@ class AgentDecisionEngine:
 
         account = result["account"]
 
-        # Step 2: Determine account state
         if account["is_locked"]:
             diagnosis = (
                 f"Account '{username}' is locked with "
                 f"{account['failed_login_attempts']} failed login attempts."
             )
 
-            # Step 3: Authorization required
-            if not authorized:
+            if "account.unlock" not in granted_permissions:
                 return {
                     "success": True,
                     "stage": "authorization",
@@ -65,20 +59,18 @@ class AgentDecisionEngine:
                     "diagnosis": diagnosis,
                     "message": (
                         "The account is locked. "
-                        "Unlocking the account requires authorization."
+                        "Unlocking requires account.unlock permission."
                     ),
                 }
 
-            # Step 4: Execute authorized action
-            action_result = execute_tool(
+            action_result = await execute_tool(
                 db=db,
                 tool_name="unlock_account",
                 parameters={
                     "username": username,
                     "incident_id": incident_id,
-                    "authorized": True,
                 },
-                authorized=True,
+                permissions=granted_permissions,
             )
 
             if not action_result["success"]:
@@ -96,7 +88,6 @@ class AgentDecisionEngine:
                 "action": action_result["result"],
             }
 
-        # Step 5: Account is not locked
         if account["status"] != "active":
             return {
                 "success": True,
@@ -106,18 +97,14 @@ class AgentDecisionEngine:
                     f"Account '{username}' is not active. "
                     f"Current status: {account['status']}."
                 ),
-                "message": (
-                    "The account requires further investigation."
-                ),
+                "message": "The account requires further investigation.",
             }
 
         return {
             "success": True,
             "stage": "diagnosis",
             "next_action": "further_investigation",
-            "diagnosis": (
-                f"Account '{username}' is active and not locked."
-            ),
+            "diagnosis": f"Account '{username}' is active and not locked.",
             "message": (
                 "The reported problem cannot be explained "
                 "by the current account state."

@@ -1,0 +1,25 @@
+# API and server
+fastapi==0.142.2
+uvicorn==0.54.0
+
+# Configuration and validation
+pydantic==2.13.5
+pydantic-settings==2.15.0
+python-dotenv==1.2.4
+
+# HTTP integrations
+httpx==0.28.1
+
+# Database and migrations
+SQLAlchemy==2.1.3
+psycopg[binary]==3.3.6
+alembic==1.20.0
+
+# Authentication and security
+python-jose==3.5.0
+passlib==1.7.4
+bcrypt==4.2.1
+
+# Testing
+pytest==9.1.1
+pytest-asyncio==1.4.0

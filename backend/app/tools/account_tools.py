@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 
-from backend.app.models.database import Customer, Account, AgentAction
+from backend.app.models.database import Customer, Account, AgentAction, Incident
 
 
 def get_customer_account(
@@ -58,6 +58,7 @@ def unlock_account(
     username: str,
     incident_id: int,
     authorized: bool = False,
+    performed_by: str | None = None,
 ) -> dict:
     """
     Unlock a customer account.
@@ -72,6 +73,19 @@ def unlock_account(
             "message": "Account unlock was not authorized.",
         }
 
+    # Confirm that the incident exists before making any changes.
+    incident = (
+        db.query(Incident)
+        .filter(Incident.id == incident_id)
+        .first()
+    )
+
+    if not incident:
+        return {
+            "success": False,
+            "message": "Incident not found.",
+        }
+
     account = (
         db.query(Account)
         .filter(Account.username == username)
@@ -82,6 +96,14 @@ def unlock_account(
         return {
             "success": False,
             "message": "Account not found.",
+        }
+
+    # Prevent an incident belonging to another customer from
+    # authorizing changes to this account.
+    if incident.customer_id != account.customer_id:
+        return {
+            "success": False,
+            "message": "Incident does not belong to this account's customer.",
         }
 
     if not account.is_locked:
@@ -97,6 +119,7 @@ def unlock_account(
     action = AgentAction(
         incident_id=incident_id,
         action="unlock_account",
+        performed_by=performed_by,
         result=f"Account '{username}' was successfully unlocked.",
         success=True,
     )

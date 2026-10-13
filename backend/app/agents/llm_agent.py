@@ -3,6 +3,7 @@ import re
 
 from backend.app.services.llm_service import get_llm_provider
 from backend.app.agents.tool_registry import list_tools
+from backend.app.integrations.registry import list_integrations
 
 
 class LLMAgent:
@@ -23,13 +24,11 @@ class LLMAgent:
 
         response = response.strip()
 
-        # First try the complete response.
         try:
             return json.loads(response)
         except json.JSONDecodeError:
             pass
 
-        # Try extracting a JSON object from surrounding text.
         match = re.search(
             r"\{.*\}",
             response,
@@ -47,7 +46,9 @@ class LLMAgent:
         self,
         customer_message: str,
     ) -> dict:
+
         tools = list_tools()
+        integrations = list_integrations()
 
         tool_descriptions = []
 
@@ -59,6 +60,19 @@ class LLMAgent:
                     "read_only": tool["read_only"],
                     "requires_authorization": tool[
                         "requires_authorization"
+                    ],
+                }
+            )
+
+        integration_descriptions = []
+
+        for integration in integrations:
+            integration_descriptions.append(
+                {
+                    "name": integration["name"],
+                    "base_url": integration["base_url"],
+                    "allowed_methods": integration[
+                        "allowed_methods"
                     ],
                 }
             )
@@ -84,9 +98,40 @@ Available tools:
 
 {json.dumps(tool_descriptions, indent=2)}
 
+Approved integrations:
+
+{json.dumps(integration_descriptions, indent=2)}
+
 Customer message:
 
 {customer_message}
+
+For REST API calls:
+
+- Only select "call_rest_api" when an approved integration
+  must be contacted.
+- "integration" MUST be the name of an approved integration
+  from the provided integration list.
+- Never invent an integration name.
+- "method" must be one of:
+  GET, POST, PUT, PATCH, DELETE.
+- "path" must contain the API path beginning with "/".
+- Do not provide a complete URL.
+- Do not use an arbitrary domain or IP address.
+- "payload" may be null when the request does not require a body.
+- "headers" may be null when additional headers are not required.
+- Do not invent authorization credentials, API keys,
+  passwords, or secret values.
+- The system will independently enforce authorization,
+  integration allowlisting, and HTTP method restrictions.
+
+For non-REST tools:
+
+- "integration" must be null.
+- "method" must be null.
+- "path" must be null.
+- "payload" must be null.
+- "headers" must be null.
 
 Return exactly:
 
@@ -94,7 +139,12 @@ Return exactly:
     "intent": "short description",
     "tool": "tool_name_or_none",
     "reason": "why this tool is appropriate",
-    "requires_authorization": true
+    "requires_authorization": true,
+    "integration": "local_health",
+    "method": "GET",
+    "path": "/health",
+    "payload": null,
+    "headers": null
 }}
 """
 
@@ -106,7 +156,9 @@ Return exactly:
         except (json.JSONDecodeError, ValueError) as exc:
             return {
                 "success": False,
-                "message": f"Unable to parse LLM decision: {exc}",
+                "message": (
+                    f"Unable to parse LLM decision: {exc}"
+                ),
                 "raw_response": response,
             }
 
@@ -115,16 +167,22 @@ Return exactly:
             "tool",
             "reason",
             "requires_authorization",
+            "integration",
+            "method",
+            "path",
+            "payload",
+            "headers",
         }
 
         if not required_fields.issubset(decision.keys()):
             return {
                 "success": False,
-                "message": "LLM decision is missing required fields.",
+                "message": (
+                    "LLM decision is missing required fields."
+                ),
                 "raw_response": decision,
             }
 
-        # Security: only registered tools may be selected.
         valid_tools = {
             tool["name"]
             for tool in tools
@@ -143,9 +201,10 @@ Return exactly:
                 "raw_response": decision,
             }
 
-        # Security: authorization must come from the registry,
-        # not from the LLM.
+        # Security: authorization always comes from
+        # the tool registry, not from the LLM.
         if decision["tool"] != "none":
+
             selected_tool = next(
                 tool
                 for tool in tools
@@ -155,6 +214,90 @@ Return exactly:
             decision["requires_authorization"] = (
                 selected_tool["requires_authorization"]
             )
+
+        # REST-specific validation.
+        if decision["tool"] == "call_rest_api":
+
+            valid_integrations = {
+                integration["name"]
+                for integration in integrations
+            }
+
+            integration = decision.get("integration")
+
+            if integration not in valid_integrations:
+                return {
+                    "success": False,
+                    "message": (
+                        "REST decision selected an "
+                        "unregistered integration."
+                    ),
+                    "raw_response": decision,
+                }
+
+            allowed_methods = {
+                "GET",
+                "POST",
+                "PUT",
+                "PATCH",
+                "DELETE",
+            }
+
+            method = decision.get("method")
+
+            if not isinstance(method, str):
+                return {
+                    "success": False,
+                    "message": (
+                        "REST decision must include a "
+                        "valid HTTP method."
+                    ),
+                    "raw_response": decision,
+                }
+
+            method = method.upper()
+
+            if method not in allowed_methods:
+                return {
+                    "success": False,
+                    "message": (
+                        f"REST method '{method}' "
+                        "is not allowed."
+                    ),
+                    "raw_response": decision,
+                }
+
+            path = decision.get("path")
+
+            if not isinstance(path, str) or not path:
+                return {
+                    "success": False,
+                    "message": (
+                        "REST decision must include "
+                        "a valid API path."
+                    ),
+                    "raw_response": decision,
+                }
+
+            if not path.startswith("/"):
+                return {
+                    "success": False,
+                    "message": (
+                        "REST API path must begin "
+                        "with '/'."
+                    ),
+                    "raw_response": decision,
+                }
+
+            decision["method"] = method
+
+        else:
+
+            decision["integration"] = None
+            decision["method"] = None
+            decision["path"] = None
+            decision["payload"] = None
+            decision["headers"] = None
 
         return {
             "success": True,

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -8,18 +8,106 @@ class Base(DeclarativeBase):
     pass
 
 
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    username: Mapped[str] = mapped_column(
+        String(120),
+        unique=True,
+        nullable=False,
+        index=True,
+    )
+
+    password_hash: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+    )
+
+    role: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        default="customer",
+    )
+
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+    )
+
+    failed_login_attempts: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+    )
+
+    locked_until: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+        nullable=False,
+    )
+
+
+class LoginAuditLog(Base):
+    __tablename__ = "login_audit_logs"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+    )
+
+    username: Mapped[str] = mapped_column(
+        String(120),
+        nullable=False,
+        index=True,
+    )
+
+    event: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+    )
+
+    success: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+        nullable=False,
+    )
+
+
 class Customer(Base):
     __tablename__ = "customers"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    name: Mapped[str] = mapped_column(String(120), nullable=False)
+
+    name: Mapped[str] = mapped_column(
+        String(120),
+        nullable=False,
+    )
+
     email: Mapped[str] = mapped_column(
         String(255),
         unique=True,
         nullable=False,
         index=True,
     )
-    phone: Mapped[str | None] = mapped_column(String(30), nullable=True)
+
+    phone: Mapped[str | None] = mapped_column(
+        String(30),
+        nullable=True,
+    )
 
     accounts: Mapped[list["Account"]] = relationship(
         back_populates="customer",
@@ -36,6 +124,7 @@ class Account(Base):
     __tablename__ = "accounts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
     customer_id: Mapped[int] = mapped_column(
         ForeignKey("customers.id"),
         nullable=False,
@@ -99,7 +188,7 @@ class Incident(Base):
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
         nullable=False,
     )
 
@@ -128,6 +217,11 @@ class AgentAction(Base):
         nullable=False,
     )
 
+    performed_by: Mapped[str | None] = mapped_column(
+        String(120),
+        nullable=True,
+    )
+
     result: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
@@ -141,7 +235,7 @@ class AgentAction(Base):
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
         nullable=False,
     )
 
