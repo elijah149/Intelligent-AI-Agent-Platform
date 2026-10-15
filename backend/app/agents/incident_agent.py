@@ -61,6 +61,21 @@ def run_account_recovery_agent(
 
     account = diagnosis.get("account") or {}
 
+    # Do not unlock the Account when the separate User record is
+    # locked or inactive. That requires investigation of User auth state.
+    if diagnosis.get("user_locked") or diagnosis.get("user_active") is False:
+        return {
+            "success": False,
+            "stage": "diagnosis",
+            "incident_id": incident.id,
+            "message": (
+                "The User record is locked or inactive, while this recovery "
+                "flow only unlocks the Account record. Investigate the User "
+                "authentication state first. No account changes were made."
+            ),
+            "diagnosis": diagnosis.get("diagnosis"),
+        }
+
     if not account.get("is_locked"):
         return {
             "success": True,

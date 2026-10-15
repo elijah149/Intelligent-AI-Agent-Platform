@@ -242,3 +242,88 @@ class AgentAction(Base):
     incident: Mapped["Incident"] = relationship(
         back_populates="actions",
     )
+
+
+class Invoice(Base):
+    """Demo invoice record used for read-only billing investigations."""
+
+    __tablename__ = "invoices"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    customer_id: Mapped[int] = mapped_column(
+        ForeignKey("customers.id"),
+        nullable=False,
+        index=True,
+    )
+
+    invoice_number: Mapped[str] = mapped_column(
+        String(80),
+        unique=True,
+        nullable=False,
+        index=True,
+    )
+
+    amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    currency: Mapped[str] = mapped_column(
+        String(3),
+        nullable=False,
+        default="TZS",
+    )
+
+    invoice_status: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="unpaid",
+    )
+
+    payment_status: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="pending",
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+        nullable=False,
+    )
+
+
+class KnowledgeDocument(Base):
+    """A source document used by the customer-support knowledge base."""
+
+    __tablename__ = "knowledge_documents"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    title: Mapped[str] = mapped_column(
+        String(200),
+        nullable=False,
+        index=True,
+    )
+
+    source: Mapped[str] = mapped_column(
+        String(300),
+        nullable=False,
+        default="manual",
+    )
+
+    content: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
+
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        index=True,
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+        nullable=False,
+    )

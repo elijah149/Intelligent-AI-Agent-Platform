@@ -1,4 +1,5 @@
 import json
+import re
 
 from sqlalchemy.orm import Session
 from backend.app.models.database import Incident
@@ -8,6 +9,8 @@ from backend.app.agents.tool_executor import execute_tool
 from backend.app.agents.tool_registry import list_tools
 from backend.app.integrations.registry import list_integrations
 from backend.app.agents.execution_policy import execution_policy
+from backend.app.agents.issue_classifier import classify_issue
+from backend.app.agents.issue_router import route_issue
 
 
 def incident_belongs_to_customer(
@@ -67,11 +70,21 @@ class AgentLoop:
         max_steps: int = 7,
     ) -> dict:
 
+        # Classify the issue for routing and support context.
+        issue_classification = classify_issue(customer_message)
+        issue_route = route_issue(issue_classification)
+
         # Permissions must come from trusted server-side RBAC.
         # The legacy authorized flag must never grant tool permissions.
         effective_permissions = set(permissions or ())
 
-        history = []
+        history = [{
+            "type": "issue_classification",
+            "classification": issue_classification,
+        }, {
+            "type": "issue_routing",
+            "routing": issue_route,
+        }]
 
         # Prevent formal diagnosis from running repeatedly
         # after the account has already been diagnosed.
@@ -91,7 +104,8 @@ class AgentLoop:
         # ------------------------------------------------
 
         decision_result = await llm_agent.decide(
-            customer_message
+            customer_message,
+            issue_classification=issue_classification,
         )
 
         if not decision_result["success"]:
@@ -99,21 +113,54 @@ class AgentLoop:
 
         decision = decision_result["decision"]
 
-        # The first operational step is always account investigation.
-        # The LLM may understand the customer's intent, but it must
-        # not skip the required investigation before incident creation.
-        decision = {
-            "intent": decision.get(
-                "intent",
-                "Investigate customer account",
-            ),
-            "tool": "get_customer_account",
-            "reason": (
-                "Account state must be investigated before "
-                "creating and diagnosing the support incident."
-            ),
-            "requires_authorization": False,
-        }
+        # Account-access issues must begin with account investigation.
+        # Other support categories follow the registered-tool decision
+        # selected by the LLM. Backend authorization remains authoritative.
+        if issue_route["workflow"] == "account_investigation":
+            decision = {
+                "intent": decision.get(
+                    "intent",
+                    "Investigate customer account",
+                ),
+                "tool": "get_customer_account",
+                "reason": (
+                    "Account-access issues require account investigation "
+                    "before corrective actions or incident resolution."
+                ),
+                "requires_authorization": False,
+                "integration": None,
+                "method": None,
+                "path": None,
+                "payload": None,
+                "headers": None,
+            }
+        elif issue_route["workflow"] == "billing_investigation":
+            decision = {
+                "intent": "Investigate customer invoice",
+                "tool": "lookup_invoice",
+                "reason": (
+                    "Billing issues must use the read-only invoice "
+                    "investigation tool."
+                ),
+                "requires_authorization": True,
+                "integration": None,
+                "method": None,
+                "path": None,
+                "payload": None,
+                "headers": None,
+            }
+        elif issue_route["workflow"] == "clarify":
+            return {
+                "success": True,
+                "status": "clarification_required",
+                "message": (
+                    "Please provide more details about the problem "
+                    "so the support agent can route it correctly."
+                ),
+                "classification": issue_classification,
+                "routing": issue_route,
+                "history": history,
+            }
 
         # Global sequential counter for audit history.
         history_step = 0
@@ -251,6 +298,30 @@ class AgentLoop:
                     "username": username,
                 }
 
+            elif tool_name == "lookup_invoice":
+
+                match = re.search(
+                    r"\bINV-[A-Z0-9-]+\b",
+                    customer_message,
+                    re.IGNORECASE,
+                )
+
+                if not match:
+                    return {
+                        "success": True,
+                        "status": "clarification_required",
+                        "message": (
+                            "Please provide the invoice number, "
+                            "for example INV-DEMO-001."
+                        ),
+                        "history": history,
+                    }
+
+                parameters = {
+                    "username": username,
+                    "invoice_number": match.group(0).upper(),
+                }
+
             elif tool_name == "unlock_account":
 
                 parameters = {
@@ -378,6 +449,50 @@ class AgentLoop:
                     "status": "tool_failed",
                     "tool": tool_name,
                     "message": execution["message"],
+                    "history": history,
+                }
+
+            # ------------------------------------------------
+            # Billing investigation: return verified tool data
+            # without another LLM decision.
+            # ------------------------------------------------
+
+            if tool_name == "lookup_invoice":
+                invoice_result = execution.get("result", {})
+
+                if not invoice_result.get("found"):
+                    return {
+                        "success": True,
+                        "status": "completed",
+                        "tool": tool_name,
+                        "message": invoice_result.get(
+                            "message",
+                            "Account or invoice not found.",
+                        ),
+                        "invoice": invoice_result,
+                        "history": history,
+                    }
+
+                if invoice_result.get("paid_but_unpaid_invoice"):
+                    message = (
+                        f"Invoice {invoice_result.get('invoice_number')} "
+                        "has a billing discrepancy: payment is marked "
+                        "paid, but the invoice is marked unpaid. "
+                        "The record requires billing-team review."
+                    )
+                else:
+                    message = (
+                        f"Invoice {invoice_result.get('invoice_number')} "
+                        "was found. No paid-but-unpaid mismatch was "
+                        "detected in the available record."
+                    )
+
+                return {
+                    "success": True,
+                    "status": "completed",
+                    "tool": tool_name,
+                    "message": message,
+                    "invoice": invoice_result,
                     "history": history,
                 }
 

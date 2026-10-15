@@ -4,9 +4,7 @@ import "./App.css";
 const DEFAULT_API = "http://127.0.0.1:47709";
 
 export default function App() {
-  const [apiUrl, setApiUrl] = useState(
-    () => localStorage.getItem("agent_api_url") || DEFAULT_API
-  );
+  const [apiUrl, setApiUrl] = useState(DEFAULT_API);
   const [token, setToken] = useState(
     () => localStorage.getItem("agent_token") || ""
   );
@@ -34,6 +32,11 @@ export default function App() {
   const [incidentIssue, setIncidentIssue] = useState("");
   const [incidentId, setIncidentId] = useState("");
   const [incident, setIncident] = useState(null);
+
+  const [integrations, setIntegrations] = useState([]);
+  const [integrationChecks, setIntegrationChecks] = useState({});
+  const [integrationsLoading, setIntegrationsLoading] = useState(false);
+  const [checkingIntegration, setCheckingIntegration] = useState("");
 
   const base = apiUrl.trim().replace(/\/+$/, "");
 
@@ -66,6 +69,59 @@ export default function App() {
       setHealth(data.status === "healthy" ? "Online" : "Unknown");
     } catch {
       setHealth("Offline");
+    }
+  }
+
+  async function loadIntegrations() {
+    if (!user || user.role !== "admin") {
+      setNotice("Only administrators can manage integrations.");
+      return;
+    }
+
+    setIntegrationsLoading(true);
+    setNotice("");
+
+    try {
+      const data = await request("/integrations");
+      setIntegrations(data.integrations || []);
+    } catch (error) {
+      setNotice(`Could not load integrations: ${error.message}`);
+    } finally {
+      setIntegrationsLoading(false);
+    }
+  }
+
+  async function checkIntegrationHealth(name) {
+    setCheckingIntegration(name);
+    setIntegrationChecks((current) => ({
+      ...current,
+      [name]: { loading: true },
+    }));
+
+    try {
+      const result = await request(
+        `/integrations/${encodeURIComponent(name)}/health`
+      );
+      setIntegrationChecks((current) => ({
+        ...current,
+        [name]: {
+          loading: false,
+          reachable: Boolean(result.reachable),
+          statusCode: result.status_code,
+          message: result.message || "",
+        },
+      }));
+    } catch (error) {
+      setIntegrationChecks((current) => ({
+        ...current,
+        [name]: {
+          loading: false,
+          reachable: false,
+          message: error.message,
+        },
+      }));
+    } finally {
+      setCheckingIntegration("");
     }
   }
 
@@ -222,6 +278,9 @@ export default function App() {
     { name: "Overview", icon: "◫" },
     { name: "AI Support", icon: "✳" },
     { name: "Incidents", icon: "▤" },
+    ...(user?.role === "admin"
+      ? [{ name: "Integrations", icon: "⇄" }]
+      : []),
     { name: "Settings", icon: "⚙" },
   ];
 
@@ -229,9 +288,13 @@ export default function App() {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark">✳</div>
-          <div>
-            <strong>AgentFlow</strong>
+          <img
+            className="brand-mark"
+            src="/src/assets/hexa-logo.svg"
+            alt=""
+          />
+          <div className="brand-copy">
+            <strong>AI Agent Platform</strong>
             <span>INTELLIGENT SUPPORT</span>
           </div>
         </div>
@@ -245,6 +308,9 @@ export default function App() {
               onClick={() => {
                 setPage(item.name);
                 setNotice("");
+                if (item.name === "Integrations") {
+                  loadIntegrations();
+                }
               }}
             >
               <span className="nav-icon">{item.icon}</span>
@@ -508,6 +574,119 @@ export default function App() {
                   {incident.diagnosis && <><h4>Diagnosis</h4><p>{incident.diagnosis}</p></>}
                 </section>
               )}
+            </>
+          )}
+
+          {page === "Integrations" && user?.role === "admin" && (
+            <>
+              <section className="page-heading">
+                <div>
+                  <div className="eyebrow">SYSTEM CONNECTIONS</div>
+                  <h1>Integrations</h1>
+                  <p>View registered services and check whether each service is reachable.</p>
+                </div>
+                <button
+                  className="primary-button"
+                  onClick={loadIntegrations}
+                  disabled={integrationsLoading}
+                >
+                  {integrationsLoading ? "Refreshing…" : "↻ Refresh list"}
+                </button>
+              </section>
+
+              <section className="panel integrations-panel">
+                <div className="panel-title-row">
+                  <div>
+                    <h3>Registered integrations</h3>
+                    <p className="muted">
+                      {integrations.length} integration{integrations.length === 1 ? "" : "s"} registered
+                    </p>
+                  </div>
+                  <span className="pill">
+                    {integrationsLoading ? "Loading…" : "Admin access"}
+                  </span>
+                </div>
+
+                {integrationsLoading && integrations.length === 0 ? (
+                  <div className="integration-empty">Loading integrations…</div>
+                ) : integrations.length === 0 ? (
+                  <div className="integration-empty">
+                    No integrations are registered, or the list could not be loaded.
+                    <button className="secondary-button" onClick={loadIntegrations}>
+                      Try again
+                    </button>
+                  </div>
+                ) : (
+                  <div className="integration-list">
+                    {integrations.map((integration) => {
+                      const check = integrationChecks[integration.name];
+                      const statusText = check?.loading
+                        ? "Checking…"
+                        : check
+                          ? check.reachable
+                            ? "Reachable"
+                            : "Unreachable"
+                          : "Not checked";
+
+                      return (
+                        <article className="integration-item" key={integration.name}>
+                          <div className="integration-main">
+                            <div className="integration-symbol">⇄</div>
+                            <div className="integration-copy">
+                              <strong>{integration.name}</strong>
+                              <span>
+                                Allowed methods: {(integration.allowed_methods || []).join(", ") || "None"}
+                              </span>
+                              <span className="integration-endpoint">
+                                {integration.base_url}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="integration-actions">
+                            <span
+                              className={`pill ${
+                                check?.loading
+                                  ? ""
+                                  : check?.reachable
+                                    ? "pill-good"
+                                    : check && !check.reachable
+                                      ? "pill-warn"
+                                      : ""
+                              }`}
+                            >
+                              {statusText}
+                            </span>
+                            <button
+                              className="secondary-button"
+                              disabled={Boolean(check?.loading) || checkingIntegration !== ""}
+                              onClick={() => checkIntegrationHealth(integration.name)}
+                            >
+                              {check?.loading ? "Checking…" : "Check health"}
+                            </button>
+                            {check?.statusCode && (
+                              <small className="field-help">
+                                HTTP {check.statusCode}
+                              </small>
+                            )}
+                            {check?.message && (
+                              <small className="integration-error">
+                                {check.message}
+                              </small>
+                            )}
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
+
+                <div className="integration-footnote">
+                  Health checks use the backend's registered integration URL and the
+                  existing authenticated session. Only integrations registered by the
+                  backend can be checked here.
+                </div>
+              </section>
             </>
           )}
 

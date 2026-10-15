@@ -1,0 +1,18 @@
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" fill="none">
+  <defs>
+    <linearGradient id="hexa" x1="20" y1="10" x2="100" y2="100" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#818CF8"/>
+      <stop offset=".55" stop-color="#6366F1"/>
+      <stop offset="1" stop-color="#5EEAD4"/>
+    </linearGradient>
+  </defs>
+  <path d="M60 9 100 32V78L60 101 20 78V32L60 9Z"
+        stroke="url(#hexa)" stroke-width="4" stroke-linejoin="round"/>
+  <path d="M60 30 78 41V64L60 76 42 64V41L60 30Z"
+        stroke="#A5B4FC" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M42 41 60 53 78 41M60 53V76"
+        stroke="#5EEAD4" stroke-width="3"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="60" cy="53" r="4" fill="#FFFFFF"/>
+</svg>

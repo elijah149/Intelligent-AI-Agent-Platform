@@ -17,6 +17,8 @@ ROLE_PERMISSIONS = {
         "account.unlock",
         "incident.verify",
         "incident.resolve",
+        "billing.view",
+        "knowledge.manage",
     },
     "admin": {
         "agent.run",
@@ -31,6 +33,8 @@ ROLE_PERMISSIONS = {
         "user.manage",
         "system.manage",
         "audit.view",
+        "billing.view",
+        "knowledge.manage",
     },
     "system_agent": {
         "agent.run",

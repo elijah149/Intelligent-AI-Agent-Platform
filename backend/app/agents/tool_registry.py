@@ -1,3 +1,4 @@
+from backend.app.tools.billing_tools import lookup_invoice
 from backend.app.tools.http_tool import call_rest_api
 from backend.app.tools.account_tools import (
     get_customer_account,
@@ -94,6 +95,16 @@ TOOL_REGISTRY = {
         "read_only": False,
         "requires_authorization": True,
         "required_permission": "incident.diagnose",
+    },
+    "lookup_invoice": {
+        "function": lookup_invoice,
+        "description": (
+            "Look up a customer's invoice and check for a "
+            "payment-paid but invoice-unpaid discrepancy."
+        ),
+        "read_only": True,
+        "requires_authorization": True,
+        "required_permission": "billing.view",
     },
 }
 

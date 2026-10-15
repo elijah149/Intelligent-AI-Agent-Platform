@@ -5,6 +5,8 @@ from backend.app.api.ai import router as ai_router
 from backend.app.api.agent import router as agent_router
 from backend.app.api.auth import router as auth_router
 from backend.app.api.incidents import router as incidents_router
+from backend.app.api.integrations import router as integrations_router
+from backend.app.api.knowledge import router as knowledge_router
 
 
 app = FastAPI(
@@ -62,3 +64,9 @@ async def health():
     return {
         "status": "healthy",
     }
+
+
+app.include_router(knowledge_router)
+
+
+app.include_router(integrations_router)

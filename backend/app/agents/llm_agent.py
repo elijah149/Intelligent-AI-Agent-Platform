@@ -45,9 +45,15 @@ class LLMAgent:
     async def decide(
         self,
         customer_message: str,
+        issue_classification: dict | None = None,
     ) -> dict:
 
         tools = list_tools()
+        classification_context = issue_classification or {
+            "category": "unknown",
+            "confidence": 0.0,
+            "needs_clarification": True,
+        }
         integrations = list_integrations()
 
         tool_descriptions = []
@@ -82,6 +88,19 @@ You are the reasoning engine of an intelligent AI support agent.
 
 Understand the customer's problem and select the most appropriate
 registered tool for the NEXT step.
+
+Classifier output (use as guidance, not as proof of the root cause):
+{json.dumps(classification_context, indent=2)}
+
+Routing guidance:
+- account_access: investigate account access problems.
+- billing: investigate payment, invoice, or refund problems.
+- technical: investigate technical errors or service failures.
+- service_request: investigate orders, delivery, or service requests.
+- general_support or unknown: ask for clarification when needed.
+- Select only a registered tool. Do not claim a problem is fixed
+  without evidence from the relevant system.
+- Classification never grants permission or overrides backend policy.
 
 IMPORTANT:
 
