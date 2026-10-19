@@ -2,7 +2,8 @@ import json
 import re
 
 from sqlalchemy.orm import Session
-from backend.app.models.database import Incident
+from backend.app.models.database import Incident, IncidentApproval
+from backend.app.services.approval_service import create_unlock_approval
 
 from backend.app.agents.llm_agent import llm_agent
 from backend.app.agents.tool_executor import execute_tool
@@ -723,10 +724,40 @@ class AgentLoop:
 
                     if "account.unlock" not in effective_permissions:
 
+                        if incident_id is None:
+                            return {
+                                "success": False,
+                                "status": "approval_request_failed",
+                                "message": "An incident ID is required for approval.",
+                                "history": history,
+                            }
+
+                        approval = (
+                            db.query(IncidentApproval)
+                            .filter(
+                                IncidentApproval.incident_id == incident_id,
+                                IncidentApproval.action == "unlock_account",
+                                IncidentApproval.target_username == username,
+                                IncidentApproval.status == "pending",
+                            )
+                            .first()
+                        )
+
+                        if approval is None:
+                            approval = create_unlock_approval(
+                                db=db,
+                                incident_id=incident_id,
+                                username=username,
+                                requested_by=actor_username or username,
+                            )
+
                         return {
                             "success": True,
                             "status": "awaiting_authorization",
                             "tool": "unlock_account",
+                            "approval_id": approval.id,
+                            "approval_status": approval.status,
+                            "incident_id": incident_id,
                             "message": (
                                 "The formal diagnosis determined "
                                 "that the account is locked. "

@@ -327,3 +327,61 @@ class KnowledgeDocument(Base):
         default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
         nullable=False,
     )
+class IncidentApproval(Base):
+    __tablename__ = "incident_approvals"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+    )
+
+    incident_id: Mapped[int] = mapped_column(
+        ForeignKey("incidents.id"),
+        nullable=False,
+        index=True,
+    )
+
+    action: Mapped[str] = mapped_column(
+        String(120),
+        nullable=False,
+    )
+
+    target_username: Mapped[str] = mapped_column(
+        String(120),
+        nullable=False,
+        index=True,
+    )
+
+    requested_by: Mapped[str] = mapped_column(
+        String(120),
+        nullable=False,
+    )
+
+    approved_by: Mapped[str | None] = mapped_column(
+        String(120),
+        nullable=True,
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="pending",
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
+        nullable=False,
+    )
+
+    approved_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+    )
+
+    consumed_at: Mapped[datetime | None] = mapped_column(
+        DateTime,
+        nullable=True,
+    )
+
+    incident: Mapped["Incident"] = relationship()

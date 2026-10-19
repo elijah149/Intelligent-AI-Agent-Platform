@@ -21,6 +21,7 @@ ROLE_PERMISSIONS = {
         "knowledge.manage",
     },
     "admin": {
+"incident.approve",
         "agent.run",
         "account.view",
         "incident.create",

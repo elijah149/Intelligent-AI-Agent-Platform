@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import "./App.css";
 
-const DEFAULT_API = "http://127.0.0.1:47709";
+const DEFAULT_API = import.meta.env.VITE_API_URL || "http://127.0.0.1:47709";
 
 export default function App() {
   const [apiUrl, setApiUrl] = useState(DEFAULT_API);
